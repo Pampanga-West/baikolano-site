@@ -1,0 +1,33 @@
+# Logs
+*.log
+backend/backend.log
+
+# Build outputs
+target/
+backend/target/
+frontend/dist/
+dist/
+
+# Node dependencies
+node_modules/
+frontend/node_modules/
+
+# IDE & OS files
+.DS_Store
+.idea/
+*.iml
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Environment / local config
+.env
+.env.local
+*.local

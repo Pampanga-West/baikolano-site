@@ -1,0 +1,49 @@
+name: Sprint Task
+description: Standard task issue for HOPE, Inc. ERP Sprints
+title: "[<TRACK>-<ID>]: <Task Title>"
+labels: ["sprint-1"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ### HOPE ERP Sprint Task Tracking
+  - type: input
+    id: task_id
+    attributes:
+      label: Task ID
+      placeholder: "e.g. S1-DEV-01, S1-DBA-02"
+    validations:
+      required: true
+  - type: dropdown
+    id: role
+    attributes:
+      label: Role Track
+      options:
+        - Developer
+        - DB Admin
+        - UI/UX Designer
+        - Tester
+        - Scrum Master
+    validations:
+      required: true
+  - type: input
+    id: assignee
+    attributes:
+      label: Assigned Member
+      placeholder: "Member name"
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Task Scope & Objectives
+      description: Detailed description of what needs to be implemented.
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Bullet points detailing when this task is considered Done.
+    validations:
+      required: true
