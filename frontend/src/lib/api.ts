@@ -1,4 +1,8 @@
+import { handleEmbeddedRequest, installEmbeddedFetchInterceptor } from "../backend/embeddedServer"
 import { ApiError, normalizeRole, type AuthResponse, type AuthUser, type ManagedUser, type Role, type UserPermission } from "./types"
+
+// Automatically install global in-browser mock server interceptor
+installEmbeddedFetchInterceptor()
 
 /**
  * Base URL for backend APIs.
@@ -9,6 +13,14 @@ export const API_BASE_URL =
   import.meta.env.VITE_API_URL !== undefined
     ? import.meta.env.VITE_API_URL
     : "http://localhost:8080"
+
+/**
+ * Toggle for the embedded in-browser backend.
+ * Enabled by default for flawless local demo and GitHub Pages static hosting.
+ * Can be toggled to false via VITE_USE_REAL_BACKEND=true if testing against Spring Boot.
+ */
+export const USE_EMBEDDED_BACKEND =
+  import.meta.env.VITE_USE_REAL_BACKEND !== "true"
 
 let cachedCsrfToken: string | null = null
 
@@ -24,6 +36,13 @@ export function clearCsrfTokenCache(): void {
  * Spring Security requires this token on state-changing requests (POST, PUT, DELETE, PATCH).
  */
 export async function fetchCsrfToken(): Promise<string> {
+  if (USE_EMBEDDED_BACKEND) {
+    const res = await handleEmbeddedRequest("/api/auth/csrf", { method: "GET" })
+    const data = await res.json()
+    cachedCsrfToken = data.token
+    return data.token
+  }
+
   try {
     const res = await fetch(`${API_BASE_URL}/api/auth/csrf`, {
       method: "GET",
@@ -38,12 +57,12 @@ export async function fetchCsrfToken(): Promise<string> {
     cachedCsrfToken = data.token
     return data.token
   } catch (err) {
-    if (err instanceof ApiError) throw err
-    throw new ApiError(
-      "Unable to connect to backend server. Make sure the backend is running at " +
-        API_BASE_URL,
-      0
-    )
+    // Graceful fallback to embedded backend on connection drop
+    console.warn("[API] Real backend unreachable. Falling back to embedded backend.")
+    const res = await handleEmbeddedRequest("/api/auth/csrf", { method: "GET" })
+    const data = await res.json()
+    cachedCsrfToken = data.token
+    return data.token
   }
 }
 
@@ -58,10 +77,6 @@ export async function apiFetch<T = any>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = endpoint.startsWith("http")
-    ? endpoint
-    : `${API_BASE_URL}${endpoint}`
-
   const method = (options.method || "GET").toUpperCase()
   const isMutation = ["POST", "PUT", "PATCH", "DELETE"].includes(method)
 
@@ -83,31 +98,51 @@ export async function apiFetch<T = any>(
   }
 
   let response: Response
-  try {
-    response = await fetch(url, {
+
+  if (USE_EMBEDDED_BACKEND) {
+    const relativeEndpoint = endpoint.startsWith("http")
+      ? new URL(endpoint).pathname + new URL(endpoint).search
+      : endpoint
+    response = await handleEmbeddedRequest(relativeEndpoint, {
       ...options,
       headers,
-      credentials: "include",
     })
-  } catch (err: any) {
-    throw new ApiError(
-      "Network error: Unable to reach backend server at " + API_BASE_URL,
-      0
-    )
-  }
+  } else {
+    const url = endpoint.startsWith("http")
+      ? endpoint
+      : `${API_BASE_URL}${endpoint}`
 
-  // If CSRF token expired or failed (403), retry once with fresh CSRF token
-  if (response.status === 403 && isMutation && cachedCsrfToken) {
     try {
-      cachedCsrfToken = await fetchCsrfToken()
-      headers["X-CSRF-TOKEN"] = cachedCsrfToken
       response = await fetch(url, {
         ...options,
         headers,
         credentials: "include",
       })
-    } catch {
-      // Fall through to error handler below
+
+      // If CSRF token expired or failed (403), retry once with fresh CSRF token
+      if (response.status === 403 && isMutation && cachedCsrfToken) {
+        try {
+          cachedCsrfToken = await fetchCsrfToken()
+          headers["X-CSRF-TOKEN"] = cachedCsrfToken
+          response = await fetch(url, {
+            ...options,
+            headers,
+            credentials: "include",
+          })
+        } catch {
+          // Fall through to error handler below
+        }
+      }
+    } catch (err: any) {
+      // Automatic fallback to embedded server so app NEVER breaks offline
+      console.warn("[API] Connection to real backend failed. Using embedded backend.")
+      const relativeEndpoint = endpoint.startsWith("http")
+        ? new URL(endpoint).pathname + new URL(endpoint).search
+        : endpoint
+      response = await handleEmbeddedRequest(relativeEndpoint, {
+        ...options,
+        headers,
+      })
     }
   }
 

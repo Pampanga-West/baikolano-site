@@ -1,0 +1,10 @@
+{
+  "description": "Streamline business operations with a comprehensive ERP platform offering user management, role-based dashboards, and secure authentication for efficient workflow.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
