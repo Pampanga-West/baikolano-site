@@ -5,7 +5,24 @@ import Field from "../components/Field"
 import Icon from "../components/Icon"
 import ModalShell from "../components/ModalShell"
 import { userApi } from "../lib/api"
-import type { ManagedUser, Role } from "../lib/types"
+import type { AccountStatus, ManagedUser, PasswordResetRequest, Role } from "../lib/types"
+
+const selectStyle = {
+  width: "100%",
+  height: "44px",
+  padding: "0 13px",
+  borderRadius: "9px",
+  border: "1px solid #d7d9dd",
+  background: "var(--white)",
+  color: "var(--ink)",
+  fontSize: "14px",
+}
+
+function getUserStatus(u: ManagedUser): AccountStatus {
+  if (u.approvalStatus === "PENDING") return "PENDING"
+  if (u.blocked) return "BLOCKED"
+  return "ACTIVE"
+}
 
 export default function UserManagementPage({
   role,
@@ -26,18 +43,43 @@ export default function UserManagementPage({
 
   // Add User Modal State
   const [isAddOpen, setIsAddOpen] = useState(false)
+  const [addFirstName, setAddFirstName] = useState("")
+  const [addLastName, setAddLastName] = useState("")
   const [addEmail, setAddEmail] = useState("")
   const [addPassword, setAddPassword] = useState("Temporary123!")
   const [addRole, setAddRole] = useState<Role>("User")
+  const [addStatus, setAddStatus] = useState<AccountStatus>("ACTIVE")
   const [addLoading, setAddLoading] = useState(false)
 
   // Edit User Modal State
   const [editingUser, setEditingUser] = useState<ManagedUser | null>(null)
+  const [editFirstName, setEditFirstName] = useState("")
+  const [editLastName, setEditLastName] = useState("")
   const [editEmail, setEditEmail] = useState("")
+  const [editRole, setEditRole] = useState<Role>("User")
+  const [editStatus, setEditStatus] = useState<AccountStatus>("ACTIVE")
   const [editLoading, setEditLoading] = useState(false)
 
   // Action in flight
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null)
+
+  // Password Reset Requests State (Superadmin)
+  const [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([])
+  const [resetLoading, setResetLoading] = useState(false)
+  const [generatingRequestId, setGeneratingRequestId] = useState<string | null>(null)
+  const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null)
+
+  const fetchResetRequests = async () => {
+    setResetLoading(true)
+    try {
+      const list = await userApi.listResetRequests()
+      setResetRequests(list)
+    } catch {
+      // Ignore if unavailable
+    } finally {
+      setResetLoading(false)
+    }
+  }
 
   const fetchUsers = async () => {
     setLoading(true)
@@ -54,7 +96,35 @@ export default function UserManagementPage({
 
   useEffect(() => {
     fetchUsers()
+    fetchResetRequests()
   }, [])
+
+  const handleGenerateResetToken = async (req: PasswordResetRequest) => {
+    setGeneratingRequestId(req.id)
+    setError(null)
+    try {
+      const updated = await userApi.generateResetToken(req.id)
+      setResetRequests((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
+      setSuccess(
+        `Security reset token generated in password_reset_token for ${req.email}: ${updated.securityResetToken}`
+      )
+    } catch (err: any) {
+      setError(err.message || "Failed to generate security reset token.")
+    } finally {
+      setGeneratingRequestId(null)
+    }
+  }
+
+  const handleCopyToken = async (req: PasswordResetRequest) => {
+    if (!req.securityResetToken) return
+    try {
+      await navigator.clipboard.writeText(req.securityResetToken)
+      setCopiedTokenId(req.id)
+      setTimeout(() => setCopiedTokenId(null), 2000)
+    } catch {
+      // Fallback
+    }
+  }
 
   const handleAddSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -67,15 +137,21 @@ export default function UserManagementPage({
     setError(null)
     try {
       await userApi.addUser({
+        firstName: addFirstName.trim(),
+        lastName: addLastName.trim(),
         email: addEmail.trim(),
         password: addPassword.trim(),
         role: addRole,
+        status: addStatus,
       })
       setSuccess(`Account created for ${addEmail.trim()}.`)
       setIsAddOpen(false)
+      setAddFirstName("")
+      setAddLastName("")
       setAddEmail("")
       setAddPassword("Temporary123!")
       setAddRole("User")
+      setAddStatus("ACTIVE")
       fetchUsers()
     } catch (err: any) {
       setError(err.message || "Failed to add user.")
@@ -91,8 +167,14 @@ export default function UserManagementPage({
     setEditLoading(true)
     setError(null)
     try {
-      await userApi.updateUser(editingUser.id, { email: editEmail.trim() })
-      setSuccess(`User email updated to ${editEmail.trim()}.`)
+      await userApi.updateUser(editingUser.id, {
+        firstName: editFirstName.trim(),
+        lastName: editLastName.trim(),
+        email: editEmail.trim(),
+        role: editRole,
+        status: editStatus,
+      })
+      setSuccess(`Account details updated for ${editEmail.trim()}.`)
       setEditingUser(null)
       fetchUsers()
     } catch (err: any) {
@@ -146,9 +228,12 @@ export default function UserManagementPage({
 
   // Filter users
   const filteredUsers = users.filter((u) => {
+    const query = search.toLowerCase()
     const matchesSearch =
-      u.email.toLowerCase().includes(search.toLowerCase()) ||
-      (u.name && u.name.toLowerCase().includes(search.toLowerCase()))
+      u.email.toLowerCase().includes(query) ||
+      (u.name && u.name.toLowerCase().includes(query)) ||
+      (u.firstName && u.firstName.toLowerCase().includes(query)) ||
+      (u.lastName && u.lastName.toLowerCase().includes(query))
 
     const matchesRole =
       roleFilter === "ALL" || u.role?.toLowerCase() === roleFilter.toLowerCase()
@@ -220,7 +305,7 @@ export default function UserManagementPage({
             <Icon name="search" size={17} />
             <input
               type="text"
-              placeholder="Search users by email..."
+              placeholder="Search users by name or email..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               style={{
@@ -300,7 +385,14 @@ export default function UserManagementPage({
                 </tr>
               ) : (
                 filteredUsers.map((u) => {
-                  const initials = u.email.slice(0, 2).toUpperCase()
+                  const fullName = [u.firstName, u.lastName].filter(Boolean).join(" ").trim() || u.name || ""
+                  const initials = (
+                    u.firstName && u.lastName
+                      ? `${u.firstName[0]}${u.lastName[0]}`
+                      : fullName
+                      ? fullName.slice(0, 2)
+                      : u.email.slice(0, 2)
+                  ).toUpperCase()
                   const isBusy = actionLoadingId === u.id
                   const isPending = u.approvalStatus === "PENDING"
                   const isBlocked = u.blocked
@@ -321,7 +413,7 @@ export default function UserManagementPage({
                             {initials}
                           </span>
                           <div>
-                            <b>{u.email.split("@")[0]}</b>
+                            <b>{fullName || u.email.split("@")[0]}</b>
                             <small>{u.role}</small>
                           </div>
                         </div>
@@ -361,6 +453,18 @@ export default function UserManagementPage({
                               >
                                 Designate Admin
                               </button>
+                              <button
+                                onClick={() => {
+                                  setEditingUser(u)
+                                  setEditFirstName(u.firstName || "")
+                                  setEditLastName(u.lastName || "")
+                                  setEditEmail(u.email)
+                                  setEditRole(u.role)
+                                  setEditStatus(getUserStatus(u))
+                                }}
+                              >
+                                Edit
+                              </button>
                             </div>
                           ) : (
                             <span className="muted">Awaiting Superadmin</span>
@@ -393,7 +497,11 @@ export default function UserManagementPage({
                             <button
                               onClick={() => {
                                 setEditingUser(u)
+                                setEditFirstName(u.firstName || "")
+                                setEditLastName(u.lastName || "")
                                 setEditEmail(u.email)
+                                setEditRole(u.role)
+                                setEditStatus(getUserStatus(u))
                               }}
                             >
                               Edit
@@ -421,6 +529,127 @@ export default function UserManagementPage({
         </div>
       </section>
 
+      {/* ==================== PASSWORD RESET REQUESTS (SUPERADMIN) ==================== */}
+      {role === "Superadmin" && (
+        <section className="table-card" style={{ marginTop: "28px" }}>
+          <div className="table-tools">
+            <div>
+              <div style={{ fontSize: "15px", fontWeight: 700, color: "var(--ink)" }}>
+                Password Reset Requests
+              </div>
+              <div style={{ fontSize: "12px", color: "var(--muted)", marginTop: "2px" }}>
+                Review user reset requests from <code>password_reset_request</code> and generate tokens into{" "}
+                <code>password_reset_token</code> to send to users.
+              </div>
+            </div>
+            <Button variant="secondary" onClick={fetchResetRequests} disabled={resetLoading}>
+              {resetLoading ? "Refreshing…" : "Refresh Requests"}
+            </Button>
+          </div>
+
+          <div className="table-scroll">
+            <table>
+              <thead>
+                <tr>
+                  <th>Email Address</th>
+                  <th>Requested At</th>
+                  <th>Status</th>
+                  <th>Security Reset Token</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {resetLoading ? (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: "center", padding: "28px 0" }}>
+                      <div className="module-loading">
+                        <span></span>
+                        Loading password reset requests…
+                      </div>
+                    </td>
+                  </tr>
+                ) : resetRequests.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} style={{ textAlign: "center", padding: "28px 0", color: "var(--muted)" }}>
+                      No password reset requests found.
+                    </td>
+                  </tr>
+                ) : (
+                  resetRequests.map((req) => {
+                    const isGenerating = generatingRequestId === req.id
+                    const isCompleted = req.used || req.status === "COMPLETED"
+                    const hasToken = Boolean(req.securityResetToken)
+
+                    return (
+                      <tr key={req.id}>
+                        <td>
+                          <b>{req.email}</b>
+                        </td>
+                        <td>
+                          {req.requestedAt
+                            ? new Date(req.requestedAt).toLocaleString()
+                            : "—"}
+                        </td>
+                        <td>
+                          {isCompleted ? (
+                            <Badge kind="active">COMPLETED</Badge>
+                          ) : hasToken ? (
+                            <Badge kind="admin">TOKEN GENERATED</Badge>
+                          ) : (
+                            <Badge kind="pending">PENDING</Badge>
+                          )}
+                        </td>
+                        <td>
+                          {req.securityResetToken ? (
+                            <code
+                              style={{
+                                padding: "4px 8px",
+                                borderRadius: "6px",
+                                background: "var(--surface)",
+                                border: "1px solid var(--border)",
+                                fontSize: "11px",
+                                fontWeight: 600,
+                                color: "var(--ink)",
+                              }}
+                            >
+                              {req.securityResetToken}
+                            </code>
+                          ) : (
+                            <span className="muted">Not generated yet</span>
+                          )}
+                        </td>
+                        <td>
+                          <div className="row-actions">
+                            {!isCompleted && (
+                              <button
+                                className="approve"
+                                disabled={isGenerating}
+                                onClick={() => handleGenerateResetToken(req)}
+                              >
+                                {isGenerating
+                                  ? "Generating…"
+                                  : hasToken
+                                  ? "Regenerate Token"
+                                  : "Generate Token"}
+                              </button>
+                            )}
+                            {hasToken && (
+                              <button onClick={() => handleCopyToken(req)}>
+                                {copiedTokenId === req.id ? "Copied!" : "Copy Token"}
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
       {/* ==================== ADD USER MODAL ==================== */}
       {isAddOpen && (
         <ModalShell
@@ -439,6 +668,23 @@ export default function UserManagementPage({
           }
         >
           <form onSubmit={handleAddSubmit}>
+            <div className="form-grid">
+              <Field
+                label="First name"
+                type="text"
+                placeholder="e.g. Juan"
+                value={addFirstName}
+                onChange={setAddFirstName}
+              />
+              <Field
+                label="Last name"
+                type="text"
+                placeholder="e.g. Dela Cruz"
+                value={addLastName}
+                onChange={setAddLastName}
+              />
+            </div>
+
             <Field
               label="Email address"
               type="email"
@@ -454,29 +700,38 @@ export default function UserManagementPage({
               onChange={setAddPassword}
             />
 
-            {role === "Superadmin" && (
-              <label className="field" style={{ marginTop: "12px", display: "block" }}>
-                <span style={{ fontSize: "12px", fontWeight: 600, display: "block", marginBottom: "4px" }}>
-                  Role Assignment
-                </span>
-                <select
-                  value={addRole}
-                  onChange={(e) => setAddRole(e.target.value as Role)}
-                  style={{
-                    width: "100%",
-                    padding: "8px 12px",
-                    borderRadius: "8px",
-                    border: "1px solid var(--border)",
-                    background: "var(--surface)",
-                    fontSize: "13px",
-                  }}
-                >
-                  <option value="User">User</option>
-                  <option value="Admin">Admin</option>
-                  <option value="Superadmin">Superadmin</option>
-                </select>
+            <div className="form-grid">
+              <label className="field">
+                <span>Role Assignment</span>
+                <div className="input-wrap">
+                  <select
+                    value={addRole}
+                    onChange={(e) => setAddRole(e.target.value as Role)}
+                    disabled={role !== "Superadmin"}
+                    style={selectStyle}
+                  >
+                    <option value="User">User</option>
+                    {role === "Superadmin" && <option value="Admin">Admin</option>}
+                    {role === "Superadmin" && <option value="Superadmin">Superadmin</option>}
+                  </select>
+                </div>
               </label>
-            )}
+
+              <label className="field">
+                <span>Account Status</span>
+                <div className="input-wrap">
+                  <select
+                    value={addStatus}
+                    onChange={(e) => setAddStatus(e.target.value as AccountStatus)}
+                    style={selectStyle}
+                  >
+                    <option value="ACTIVE">Active</option>
+                    <option value="PENDING">Pending</option>
+                    <option value="BLOCKED">Blocked</option>
+                  </select>
+                </div>
+              </label>
+            </div>
           </form>
         </ModalShell>
       )}
@@ -485,7 +740,7 @@ export default function UserManagementPage({
       {editingUser && (
         <ModalShell
           title="Edit User Details"
-          subtitle={`Update email address for ${editingUser.email}.`}
+          subtitle={`Update account information, role, and status for ${editingUser.email}.`}
           close={() => setEditingUser(null)}
           footer={
             <>
@@ -499,12 +754,62 @@ export default function UserManagementPage({
           }
         >
           <form onSubmit={handleEditSubmit}>
+            <div className="form-grid">
+              <Field
+                label="First name"
+                type="text"
+                placeholder="e.g. Juan"
+                value={editFirstName}
+                onChange={setEditFirstName}
+              />
+              <Field
+                label="Last name"
+                type="text"
+                placeholder="e.g. Dela Cruz"
+                value={editLastName}
+                onChange={setEditLastName}
+              />
+            </div>
+
             <Field
               label="Email address"
               type="email"
               value={editEmail}
               onChange={setEditEmail}
             />
+
+            <div className="form-grid">
+              <label className="field">
+                <span>Role Assignment</span>
+                <div className="input-wrap">
+                  <select
+                    value={editRole}
+                    onChange={(e) => setEditRole(e.target.value as Role)}
+                    disabled={role !== "Superadmin"}
+                    style={selectStyle}
+                  >
+                    <option value="User">User</option>
+                    {role === "Superadmin" && <option value="Admin">Admin</option>}
+                    {role === "Superadmin" && <option value="Superadmin">Superadmin</option>}
+                  </select>
+                </div>
+              </label>
+
+              <label className="field">
+                <span>Account Status</span>
+                <div className="input-wrap">
+                  <select
+                    value={editStatus}
+                    onChange={(e) => setEditStatus(e.target.value as AccountStatus)}
+                    style={selectStyle}
+                  >
+                    <option value="ACTIVE">Active</option>
+                    <option value="PENDING">Pending</option>
+                    <option value="BLOCKED">Blocked</option>
+                  </select>
+                </div>
+              </label>
+            </div>
           </form>
         </ModalShell>
       )}

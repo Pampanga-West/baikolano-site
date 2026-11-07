@@ -15,13 +15,15 @@
 import bcrypt from "bcryptjs"
 import {
   deleteUserFromSupabase,
+  fetchPasswordResetRequestsFromSupabase,
   fetchUserRightsFromSupabase,
   fetchUsersFromSupabase,
   findUserByEmailFromSupabase,
   findUserByIdFromSupabase,
+  generateTokenForResetRequestInSupabase,
   insertAuditLogIntoSupabase,
   insertUserIntoSupabase,
-  createPasswordResetTokenInSupabase,
+  createPasswordResetRequestInSupabase,
   resetPasswordWithTokenInSupabase,
   saveUserRightsInSupabase,
   updateUserInSupabase,
@@ -337,25 +339,28 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
     return jsonResponse({ message: "Logout successful." })
   }
 
-  // 8. Password Reset Request (POST /api/auth/reset-password-request) -> Writes to Supabase password_reset_token
+  // 8. Password Reset Request (POST /api/auth/reset-password-request) -> Writes PENDING request to Supabase password_reset_request
   if (pathname === "/api/auth/reset-password-request" && method === "POST") {
     const email = (body.email || "").trim().toLowerCase()
-    if (!email) {
-      return jsonResponse({ message: "Email is required." }, 400)
+    if (!email || !email.includes("@")) {
+      return jsonResponse({ message: "Please enter a valid email address." }, 400)
     }
 
-    const rawToken = generateUuid()
     const targetUser = await getLiveUserByEmail(email)
 
-    if (targetUser) {
-      await createPasswordResetTokenInSupabase(targetUser.id, rawToken, targetUser.email).catch((err) =>
-        console.warn("[Supabase] Failed to write reset token:", err)
-      )
+    try {
+      await createPasswordResetRequestInSupabase({
+        userId: targetUser ? targetUser.id : null,
+        email,
+      })
+    } catch (err: any) {
+      console.warn("[Supabase] Failed to write password reset request:", err)
+      return jsonResponse({ message: err.message || "Failed to record password reset request." }, 500)
     }
 
     return jsonResponse({
-      message: "If an account exists for this email, a password reset link has been dispatched.",
-      token: rawToken,
+      message:
+        "Password reset request submitted. Please check your email after two to three business days for your security reset token.",
     })
   }
 
@@ -403,15 +408,21 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
         visibleUsers = allUsers.filter((u) => u.role !== "Superadmin")
       }
 
-      const dtoList = visibleUsers.map((u) => ({
-        id: u.id,
-        email: u.email,
-        role: u.role,
-        approvalStatus: u.approvalStatus,
-        blocked: u.blocked,
-        isProtected: u.role === "Superadmin" && activeSuperadminsCount <= 1,
-        createdAt: u.createdAt,
-      }))
+      const dtoList = visibleUsers.map((u) => {
+        const fullName = [u.firstName, u.lastName].filter(Boolean).join(" ").trim()
+        return {
+          id: u.id,
+          email: u.email,
+          firstName: u.firstName || "",
+          lastName: u.lastName || "",
+          name: fullName || undefined,
+          role: u.role,
+          approvalStatus: u.approvalStatus,
+          blocked: u.blocked,
+          isProtected: u.role === "Superadmin" && activeSuperadminsCount <= 1,
+          createdAt: u.createdAt,
+        }
+      })
 
       return jsonResponse(dtoList)
     } catch (e: any) {
@@ -435,31 +446,61 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
         return jsonResponse({ message: "An account with this email already exists." }, 409)
       }
 
+      const firstName = (body.firstName || "").trim()
+      const lastName = (body.lastName || "").trim()
+
       let role: "Superadmin" | "Admin" | "User" = "User"
       if (caller.role === "Superadmin" && body.role) {
-        if (body.role === "Admin" || body.role === "Superadmin") {
+        if (body.role === "Admin" || body.role === "Superadmin" || body.role === "User") {
           role = body.role
         }
+      }
+
+      let approvalStatus: "PENDING" | "APPROVED" = "APPROVED"
+      let blocked = false
+      const requestedStatus = String(body.status || "ACTIVE").toUpperCase()
+      if (requestedStatus === "PENDING") {
+        approvalStatus = "PENDING"
+        blocked = false
+      } else if (requestedStatus === "BLOCKED") {
+        approvalStatus = "APPROVED"
+        blocked = true
       }
 
       const created = await insertUserIntoSupabase({
         email,
         password: body.password || "Temporary123!",
         role,
-        approvalStatus: "APPROVED",
+        approvalStatus,
+        blocked,
+        firstName,
+        lastName,
       })
 
       await insertAuditLogIntoSupabase({
         table_name: "app_user",
         action: "ADD",
         record_key: created.id,
+        new_values: {
+          email: created.email,
+          first_name: created.first_name,
+          last_name: created.last_name,
+          role: created.role,
+          approval_status: created.approval_status,
+          blocked: created.blocked,
+        },
         action_by: caller.email,
       }).catch(() => {})
+
+      const fullName = [created.first_name, created.last_name].filter(Boolean).join(" ").trim()
 
       return jsonResponse(
         {
           id: created.id,
           email: created.email,
+          firstName: created.first_name || "",
+          lastName: created.last_name || "",
+          name: fullName || undefined,
           role: created.role,
           approvalStatus: created.approval_status,
           blocked: created.blocked,
@@ -472,6 +513,61 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
       if (e.message === "UNAUTHORIZED") return jsonResponse({ message: "Not authenticated." }, 401)
       if (e.message === "FORBIDDEN") return jsonResponse({ message: "Access denied." }, 403)
       return jsonResponse({ message: e.message || "Server error." }, 500)
+    }
+  }
+
+  // 10a. List Password Reset Requests (GET /api/users/reset-requests)
+  if (pathname === "/api/users/reset-requests" && method === "GET") {
+    try {
+      ensureAdmin()
+      const rows = await fetchPasswordResetRequestsFromSupabase()
+      const list = rows.map((r) => ({
+        id: r.id,
+        userId: r.user_id,
+        email: r.email,
+        securityResetToken: r.security_reset_token,
+        status: r.status,
+        used: Boolean(r.used),
+        requestedAt: r.requested_at,
+        expiresAt: r.expires_at,
+        completedAt: r.completed_at,
+      }))
+      return jsonResponse(list)
+    } catch (e: any) {
+      if (e.message === "UNAUTHORIZED") return jsonResponse({ message: "Not authenticated." }, 401)
+      if (e.message === "FORBIDDEN") return jsonResponse({ message: "Access denied." }, 403)
+      return jsonResponse({ message: e.message || "Failed to load password reset requests." }, 500)
+    }
+  }
+
+  // 10b. Superadmin Generate Token for Reset Request (POST /api/users/reset-requests/:id/generate-token)
+  const resetReqMatch = pathname.match(/^\/api\/users\/reset-requests\/([^/]+)\/generate-token$/)
+  if (resetReqMatch && method === "POST") {
+    try {
+      const caller = ensureAdmin()
+      if (caller.role !== "Superadmin") {
+        return jsonResponse({ message: "Only Superadmins can generate security reset tokens." }, 403)
+      }
+
+      const requestId = resetReqMatch[1]
+      const rawToken = generateUuid()
+      const updated = await generateTokenForResetRequestInSupabase(requestId, rawToken, caller.email)
+
+      return jsonResponse({
+        id: updated.id,
+        userId: updated.user_id,
+        email: updated.email,
+        securityResetToken: updated.security_reset_token,
+        status: updated.status,
+        used: Boolean(updated.used),
+        requestedAt: updated.requested_at,
+        expiresAt: updated.expires_at,
+        completedAt: updated.completed_at,
+      })
+    } catch (e: any) {
+      if (e.message === "UNAUTHORIZED") return jsonResponse({ message: "Not authenticated." }, 401)
+      if (e.message === "FORBIDDEN") return jsonResponse({ message: "Access denied." }, 403)
+      return jsonResponse({ message: e.message || "Failed to generate security reset token." }, 400)
     }
   }
 
@@ -645,7 +741,7 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
       }
     }
 
-    // PUT /api/users/:id (Edit User email) -> Updates Supabase app_user
+    // PUT /api/users/:id (Edit User details) -> Updates Supabase app_user
     if (!subAction && method === "PUT") {
       try {
         const caller = ensureAdmin()
@@ -654,18 +750,85 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
           return jsonResponse({ message: "Cannot edit Superadmin accounts." }, 403)
         }
 
+        const updates: Partial<{
+          email: string
+          first_name: string | null
+          last_name: string | null
+          role: "Superadmin" | "Admin" | "User"
+          approval_status: "PENDING" | "APPROVED"
+          blocked: boolean
+        }> = {}
+
         const newEmail = (body.email || "").trim().toLowerCase()
         if (newEmail && newEmail !== targetUser.email.toLowerCase()) {
           const collision = await getLiveUserByEmail(newEmail)
           if (collision && collision.id !== targetId) {
             return jsonResponse({ message: "An account with this email already exists." }, 409)
           }
+          updates.email = newEmail
+        }
 
-          const updated = await updateUserInSupabase(targetId, { email: newEmail })
+        if (body.firstName !== undefined) {
+          updates.first_name = String(body.firstName).trim() || null
+        }
+        if (body.lastName !== undefined) {
+          updates.last_name = String(body.lastName).trim() || null
+        }
 
+        if (caller.role === "Superadmin" && body.role && ["Superadmin", "Admin", "User"].includes(body.role)) {
+          if (targetUser.role === "Superadmin" && body.role !== "Superadmin" && activeSuperadminsCount <= 1) {
+            return jsonResponse(
+              { message: "Role safeguards active: The last remaining Superadmin cannot be demoted." },
+              400
+            )
+          }
+          updates.role = body.role
+        }
+
+        if (body.status) {
+          const requestedStatus = String(body.status).toUpperCase()
+          const nextRole = updates.role || targetUser.role
+          if (
+            (requestedStatus === "BLOCKED" || requestedStatus === "PENDING") &&
+            nextRole === "Superadmin" &&
+            activeSuperadminsCount <= 1
+          ) {
+            return jsonResponse(
+              { message: "Role safeguards active: The last remaining Superadmin cannot be disabled or blocked." },
+              400
+            )
+          }
+
+          if (requestedStatus === "PENDING") {
+            updates.approval_status = "PENDING"
+            updates.blocked = false
+          } else if (requestedStatus === "BLOCKED") {
+            updates.approval_status = "APPROVED"
+            updates.blocked = true
+          } else if (requestedStatus === "ACTIVE") {
+            updates.approval_status = "APPROVED"
+            updates.blocked = false
+          }
+        }
+
+        if (Object.keys(updates).length > 0) {
+          const updated = await updateUserInSupabase(targetId, updates)
+
+          await insertAuditLogIntoSupabase({
+            table_name: "app_user",
+            action: "EDIT",
+            record_key: targetId,
+            new_values: updates,
+            action_by: caller.email,
+          }).catch(() => {})
+
+          const fullName = [updated.first_name, updated.last_name].filter(Boolean).join(" ").trim()
           return jsonResponse({
             id: updated.id,
             email: updated.email,
+            firstName: updated.first_name || "",
+            lastName: updated.last_name || "",
+            name: fullName || undefined,
             role: updated.role,
             approvalStatus: updated.approval_status,
             blocked: updated.blocked,
@@ -674,9 +837,13 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
           })
         }
 
+        const fullName = [targetUser.firstName, targetUser.lastName].filter(Boolean).join(" ").trim()
         return jsonResponse({
           id: targetUser.id,
           email: targetUser.email,
+          firstName: targetUser.firstName || "",
+          lastName: targetUser.lastName || "",
+          name: fullName || undefined,
           role: targetUser.role,
           approvalStatus: targetUser.approvalStatus,
           blocked: targetUser.blocked,

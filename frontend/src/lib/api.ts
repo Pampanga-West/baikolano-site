@@ -1,5 +1,5 @@
 import { handleEmbeddedRequest, installEmbeddedFetchInterceptor } from "../backend/embeddedServer"
-import { ApiError, normalizeRole, type AuthResponse, type AuthUser, type ManagedUser, type Role, type UserPermission } from "./types"
+import { ApiError, normalizeRole, type AccountStatus, type AuthResponse, type AuthUser, type ManagedUser, type PasswordResetRequest, type Role, type UserPermission } from "./types"
 
 // Automatically install global in-browser mock server interceptor
 installEmbeddedFetchInterceptor()
@@ -314,7 +314,14 @@ export const userApi = {
    * Adds a new user directly.
    * Endpoint: POST /api/users
    */
-  addUser: (data: { email: string; role?: Role; password?: string }): Promise<ManagedUser> => {
+  addUser: (data: {
+    firstName?: string
+    lastName?: string
+    email: string
+    role?: Role
+    status?: AccountStatus
+    password?: string
+  }): Promise<ManagedUser> => {
     return apiFetch<ManagedUser>("/api/users", {
       method: "POST",
       body: JSON.stringify(data),
@@ -325,7 +332,16 @@ export const userApi = {
    * Updates user details.
    * Endpoint: PUT /api/users/:id
    */
-  updateUser: (id: string, data: { email: string }): Promise<ManagedUser> => {
+  updateUser: (
+    id: string,
+    data: {
+      firstName?: string
+      lastName?: string
+      email: string
+      role?: Role
+      status?: AccountStatus
+    }
+  ): Promise<ManagedUser> => {
     return apiFetch<ManagedUser>(`/api/users/${id}`, {
       method: "PUT",
       body: JSON.stringify(data),
@@ -373,6 +389,28 @@ export const userApi = {
     return apiFetch<{ message: string }>(`/api/users/${id}`, {
       method: "DELETE",
     })
+  },
+
+  /**
+   * Retrieves password reset requests from `password_reset_request`.
+   * Endpoint: GET /api/users/reset-requests
+   */
+  listResetRequests: (): Promise<PasswordResetRequest[]> => {
+    return apiFetch<PasswordResetRequest[]>("/api/users/reset-requests")
+  },
+
+  /**
+   * Superadmin generates a security reset token into `password_reset_token`
+   * for a password reset request.
+   * Endpoint: POST /api/users/reset-requests/:id/generate-token
+   */
+  generateResetToken: (requestId: string): Promise<PasswordResetRequest> => {
+    return apiFetch<PasswordResetRequest>(
+      `/api/users/reset-requests/${requestId}/generate-token`,
+      {
+        method: "POST",
+      }
+    )
   },
 }
 

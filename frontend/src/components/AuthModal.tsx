@@ -40,7 +40,10 @@ export default function AuthModal({
       "Create your account",
       "Start your journey with Hope, Inc. ERP.",
     ],
-    reset: ["Reset password", "We'll send you a secure link to reset it."],
+    reset: [
+      "Reset password",
+      "Request a security reset token for your account.",
+    ],
     "new-password": [
       "Set new password",
       "Choose a secure password for your account.",
@@ -127,19 +130,10 @@ export default function AuthModal({
     setError(null)
     setLoading(true)
     try {
-      // Connect to planned S1-DEV-04 endpoint (with client-side fallback)
-      try {
-        await authApi.requestPasswordReset(email.trim())
-      } catch (err: any) {
-        // If backend endpoint is not yet deployed, provide mock confirmation for UX
-        if (err.status === 404 || err.status === 0) {
-          console.info("[Sprint 1 S1-DEV-04] Password reset requested for:", email.trim())
-        } else {
-          throw err
-        }
-      }
+      const res = await authApi.requestPasswordReset(email.trim())
       setSuccessInfo(
-        `If an account exists for ${email.trim()}, a password reset link has been dispatched.`
+        res.message ||
+          "Password reset request submitted. Please check your email after two to three business days for your security reset token."
       )
     } catch (err: any) {
       setError(err.message || "Failed to request password reset.")
@@ -273,6 +267,7 @@ export default function AuthModal({
                   value={confirmPassword}
                   onChange={setConfirmPassword}
                 />
+                <PasswordStrengthBar password={password} />
                 <Button
                   type="submit"
                   className="full"
@@ -379,7 +374,7 @@ export default function AuthModal({
               className="full"
               disabled={loading}
             >
-              {loading ? "Sending link…" : "Send Reset Link"}
+              {loading ? "Submitting request…" : "Request Security Reset Token"}
             </Button>
             <button
               type="button"
@@ -389,10 +384,17 @@ export default function AuthModal({
               Back to sign in
             </button>
             <div className="token-preview">
-              First-time login or have a token?{" "}
-              <button type="button" onClick={() => switchView("new-password")}>
-                Set new password
-              </button>
+              <div style={{ marginBottom: "10px" }}>
+                First-time login or already have a security reset token?
+              </div>
+              <Button
+                type="button"
+                variant="secondary"
+                className="full"
+                onClick={() => switchView("new-password")}
+              >
+                Set New Password with Token
+              </Button>
             </div>
           </form>
         )}
@@ -424,18 +426,12 @@ export default function AuthModal({
             />
             <Field
               label="Confirm new password"
-              type="password"
+              type={showPassword ? "text" : "password"}
               placeholder="Re-enter your password"
               value={confirmPassword}
               onChange={setConfirmPassword}
             />
-            <div className="password-hint">
-              <span></span>
-              <span></span>
-              <span></span>
-              <span></span>
-              <small>Password strength</small>
-            </div>
+            <PasswordStrengthBar password={password} />
             <Button
               type="submit"
               className="full"
@@ -448,11 +444,51 @@ export default function AuthModal({
               className="back-link"
               onClick={() => switchView("reset")}
             >
-              Request a new link
+              Request a new security reset token
             </button>
           </form>
         )}
       </section>
+    </div>
+  )
+}
+
+function PasswordStrengthBar({ password }: { password: string }) {
+  const getStrength = (pw: string) => {
+    if (!pw) {
+      return { score: 0, label: "Enter a password", color: "var(--border-cool)" }
+    }
+    if (pw.length < 8) {
+      return { score: 1, label: "Weak (min. 8 characters)", color: "#ef4444" }
+    }
+
+    let score = 1
+    if (/[a-z]/.test(pw) && /[A-Z]/.test(pw)) score++
+    if (/\d/.test(pw)) score++
+    if (/[^A-Za-z0-9]/.test(pw) || pw.length >= 12) score++
+
+    if (score === 1) return { score: 1, label: "Weak", color: "#ef4444" }
+    if (score === 2) return { score: 2, label: "Fair", color: "#f59e0b" }
+    if (score === 3) return { score: 3, label: "Good", color: "var(--brand)" }
+    return { score: 4, label: "Strong", color: "#15803d" }
+  }
+
+  const { score, label, color } = getStrength(password)
+
+  return (
+    <div className="password-hint">
+      {[1, 2, 3, 4].map((level) => (
+        <span
+          key={level}
+          style={{
+            backgroundColor: score >= level ? color : "var(--border-cool)",
+          }}
+        />
+      ))}
+      <small>
+        <span>Password strength</span>
+        <b style={{ color: score > 0 ? color : "var(--muted)" }}>{label}</b>
+      </small>
     </div>
   )
 }

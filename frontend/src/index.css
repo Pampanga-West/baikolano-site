@@ -134,7 +134,7 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(29, 78, 216,
 .form-row { display: flex; align-items: center; justify-content: space-between; margin: -2px 0 16px; }
 .check-line { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); }
 .check-line input { accent-color: var(--brand); }
-.text-link, .auth-switch button, .back-link, .token-preview button { border: 0; background: none; padding: 0; color: var(--brand); font-size: 12px; font-weight: 700; }
+.text-link, .auth-switch button, .back-link, .token-preview button:not(.btn) { border: 0; background: none; padding: 0; color: var(--brand); font-size: 12px; font-weight: 700; }
 .error-banner { color: var(--danger-text); background: var(--danger-bg); }
 .error-banner span b { display: block; font-size: 11px; }
 .divider { margin: 16px 0; height: 1px; background: var(--border); text-align: center; }
@@ -146,9 +146,8 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(29, 78, 216,
 .token-preview { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border); text-align: center; color: var(--muted); font-size: 11px; }
 .token-error { margin-bottom: 20px; }
 .password-hint { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin: -5px 0 18px; }
-.password-hint span { height: 3px; border-radius: 3px; background: var(--border-cool); }
-.password-hint span:first-child { background: var(--pending-text); }
-.password-hint small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; margin-top: 2px; }
+.password-hint span { height: 4px; border-radius: 3px; background: var(--border-cool); transition: background-color 0.2s ease; }
+.password-hint small { grid-column: 1 / -1; color: var(--muted); font-size: 10px; margin-top: 2px; display: flex; justify-content: space-between; }
 
 .workspace { min-height: 100vh; background: var(--canvas); }
 .sidebar { position: fixed; z-index: 30; left: 0; top: 0; bottom: 0; width: 245px; display: flex; flex-direction: column; background: var(--navy); color: #d1d5db; }
