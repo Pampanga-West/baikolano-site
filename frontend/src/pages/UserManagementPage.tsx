@@ -67,6 +67,7 @@ export default function UserManagementPage({
   const [resetRequests, setResetRequests] = useState<PasswordResetRequest[]>([])
   const [resetLoading, setResetLoading] = useState(false)
   const [generatingRequestId, setGeneratingRequestId] = useState<string | null>(null)
+  const [deletingRequestId, setDeletingRequestId] = useState<string | null>(null)
   const [copiedTokenId, setCopiedTokenId] = useState<string | null>(null)
 
   const fetchResetRequests = async () => {
@@ -123,6 +124,20 @@ export default function UserManagementPage({
       setTimeout(() => setCopiedTokenId(null), 2000)
     } catch {
       // Fallback
+    }
+  }
+
+  const handleDeleteResetRequest = async (req: PasswordResetRequest) => {
+    setDeletingRequestId(req.id)
+    setError(null)
+    try {
+      await userApi.deleteResetRequest(req.id)
+      setResetRequests((prev) => prev.filter((r) => r.id !== req.id))
+      setSuccess(`Deleted password reset request and token for ${req.email}.`)
+    } catch (err: any) {
+      setError(err.message || "Failed to delete password reset token.")
+    } finally {
+      setDeletingRequestId(null)
     }
   }
 
@@ -577,6 +592,7 @@ export default function UserManagementPage({
                 ) : (
                   resetRequests.map((req) => {
                     const isGenerating = generatingRequestId === req.id
+                    const isDeleting = deletingRequestId === req.id
                     const isCompleted = req.used || req.status === "COMPLETED"
                     const hasToken = Boolean(req.securityResetToken)
 
@@ -623,7 +639,7 @@ export default function UserManagementPage({
                             {!isCompleted && (
                               <button
                                 className="approve"
-                                disabled={isGenerating}
+                                disabled={isGenerating || isDeleting}
                                 onClick={() => handleGenerateResetToken(req)}
                               >
                                 {isGenerating
@@ -634,10 +650,20 @@ export default function UserManagementPage({
                               </button>
                             )}
                             {hasToken && (
-                              <button onClick={() => handleCopyToken(req)}>
+                              <button
+                                disabled={isDeleting}
+                                onClick={() => handleCopyToken(req)}
+                              >
                                 {copiedTokenId === req.id ? "Copied!" : "Copy Token"}
                               </button>
                             )}
+                            <button
+                              className="danger-link"
+                              disabled={isGenerating || isDeleting}
+                              onClick={() => handleDeleteResetRequest(req)}
+                            >
+                              {isDeleting ? "Deleting…" : "Delete"}
+                            </button>
                           </div>
                         </td>
                       </tr>

@@ -367,6 +367,11 @@ export async function generateTokenForResetRequestInSupabase(
   const now = new Date()
   const expiry = new Date(now.getTime() + 72 * 3600 * 1000).toISOString() // 72 hours (3 days)
 
+  // Remove any previous tokens for this user before inserting the fresh token
+  await postgrestFetch(`/password_reset_token?user_id=eq.${encodeURIComponent(user.id)}`, {
+    method: "DELETE",
+  }).catch(() => {})
+
   // Insert into password_reset_token table
   await postgrestFetch("/password_reset_token", {
     method: "POST",
@@ -442,10 +447,9 @@ export async function resetPasswordWithTokenInSupabase(
     password_hash: hashedPassword,
   })
 
-  // Mark token used in password_reset_token
+  // Delete the consumed token from password_reset_token so it doesn't stay stuck in the database
   await postgrestFetch(`/password_reset_token?id=eq.${encodeURIComponent(tokenRecord.id)}`, {
-    method: "PATCH",
-    body: JSON.stringify({ used: true }),
+    method: "DELETE",
   }).catch(() => {})
 
   // Also mark matching request in password_reset_request as COMPLETED
@@ -470,6 +474,72 @@ export async function resetPasswordWithTokenInSupabase(
   }).catch(() => {})
 }
 
+/**
+ * Deletes all password reset tokens and reset requests for a user upon login
+ * so they do not remain permanently in the database.
+ */
+export async function cleanupUserPasswordResetTokensInSupabase(
+  userId: string,
+  email: string
+): Promise<void> {
+  const cleanEmail = email.trim().toLowerCase()
+
+  await postgrestFetch(`/password_reset_token?user_id=eq.${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  }).catch(() => {})
+
+  await postgrestFetch(`/password_reset_request?user_id=eq.${encodeURIComponent(userId)}`, {
+    method: "DELETE",
+  }).catch(() => {})
+
+  await postgrestFetch(`/password_reset_request?email=eq.${encodeURIComponent(cleanEmail)}`, {
+    method: "DELETE",
+  }).catch(() => {})
+}
+
+/**
+ * Deletes a specific password reset request and its associated token in `password_reset_token`.
+ */
+export async function deletePasswordResetRequestInSupabase(
+  requestId: string,
+  actionBy: string
+): Promise<void> {
+  const reqRows = await postgrestFetch<SupabaseResetRequestRow[]>(
+    `/password_reset_request?id=eq.${encodeURIComponent(requestId)}&select=*`
+  ).catch(() => [] as SupabaseResetRequestRow[])
+
+  if (reqRows.length > 0) {
+    const req = reqRows[0]
+    if (req.security_reset_token) {
+      await postgrestFetch(
+        `/password_reset_token?token_hash=eq.${encodeURIComponent(req.security_reset_token)}`,
+        {
+          method: "DELETE",
+        }
+      ).catch(() => {})
+    }
+    if (req.user_id) {
+      await postgrestFetch(
+        `/password_reset_token?user_id=eq.${encodeURIComponent(req.user_id)}`,
+        {
+          method: "DELETE",
+        }
+      ).catch(() => {})
+    }
+  }
+
+  await postgrestFetch(`/password_reset_request?id=eq.${encodeURIComponent(requestId)}`, {
+    method: "DELETE",
+  })
+
+  await insertAuditLogIntoSupabase({
+    table_name: "password_reset_token",
+    action: "DELETE_RESET_TOKEN",
+    record_key: requestId,
+    action_by: actionBy,
+  }).catch(() => {})
+}
+
 // ----------------------------------------------------------------------------
 // Password Verification Helper
 // ----------------------------------------------------------------------------
@@ -491,4 +561,169 @@ export function verifyPassword(plainPassword: string, hash: string): boolean {
   if (plainPassword === "testpassword123" && hash.startsWith("$2a$")) return true
 
   return false
+}
+
+// ----------------------------------------------------------------------------
+// Generic Table Editor Operations (all public tables except app_user)
+// ----------------------------------------------------------------------------
+
+export async function fetchTableRowsFromSupabase(
+  tableName: string,
+  orderBy?: string
+): Promise<Record<string, any>[]> {
+  if (tableName === "app_user") {
+    throw new Error("Access to app_user via Table Editor is restricted.")
+  }
+  const orderQuery = orderBy ? `&order=${encodeURIComponent(orderBy)}` : ""
+  return postgrestFetch<Record<string, any>[]>(
+    `/${encodeURIComponent(tableName)}?select=*${orderQuery}&limit=500`
+  )
+}
+
+export function parseStamp(
+  stampValue: unknown,
+  isDeleted?: boolean
+): [string, string, string] {
+  const defaultAction = isDeleted ? "DELETED" : "CREATED"
+  if (!stampValue || typeof stampValue !== "string" || !stampValue.trim()) {
+    return [defaultAction, "system", "2026-10-01 9:00 AM"]
+  }
+  const raw = stampValue.trim()
+  const match = raw.match(
+    /^(CREATED|EDITED|DELETED|ADDED|UPDATED|RESTORED)\s+(?:by\s+)?([^\s|·]+)\s*(?:on|at|\||·|-)?\s*(.*)$/i
+  )
+  if (match) {
+    const rawAction = match[1].toUpperCase()
+    const action =
+      rawAction === "ADDED"
+        ? "CREATED"
+        : rawAction === "UPDATED" || rawAction === "RESTORED"
+          ? "EDITED"
+          : rawAction
+    return [
+      isDeleted ? "DELETED" : action,
+      match[2] || "system",
+      match[3]?.trim() || "2026-10-01 9:00 AM",
+    ]
+  }
+  return [isDeleted ? "DELETED" : "CREATED", "system", raw]
+}
+
+export function formatMoney(amount: unknown): string {
+  const num = Number(amount)
+  if (!Number.isFinite(num)) return "$0.00"
+  return `$${num.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`
+}
+
+export async function insertTableRowIntoSupabase(
+  tableName: string,
+  payload: Record<string, any>,
+  actionBy?: string
+): Promise<Record<string, any>> {
+  if (tableName === "app_user") {
+    throw new Error("Access to app_user via Table Editor is restricted.")
+  }
+
+  const rows = await postgrestFetch<Record<string, any>[]>(
+    `/${encodeURIComponent(tableName)}`,
+    {
+      method: "POST",
+      headers: {
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(payload),
+    }
+  )
+
+  if (tableName !== "audit_log") {
+    await insertAuditLogIntoSupabase({
+      table_name: tableName,
+      action: "ADD",
+      record_key: JSON.stringify(payload).slice(0, 120),
+      new_values: payload,
+      action_by: actionBy || "superadmin",
+    }).catch(() => {})
+  }
+
+  return rows[0] || payload
+}
+
+export async function updateTableRowInSupabase(
+  tableName: string,
+  primaryKeyValues: Record<string, any>,
+  updates: Record<string, any>,
+  actionBy?: string
+): Promise<Record<string, any>> {
+  if (tableName === "app_user") {
+    throw new Error("Access to app_user via Table Editor is restricted.")
+  }
+
+  const keys = Object.entries(primaryKeyValues)
+  if (keys.length === 0) {
+    throw new Error("Primary key values are required to update a row.")
+  }
+
+  const queryParts = keys.map(
+    ([col, val]) => `${encodeURIComponent(col)}=eq.${encodeURIComponent(String(val))}`
+  )
+
+  const rows = await postgrestFetch<Record<string, any>[]>(
+    `/${encodeURIComponent(tableName)}?${queryParts.join("&")}`,
+    {
+      method: "PATCH",
+      headers: {
+        Prefer: "return=representation",
+      },
+      body: JSON.stringify(updates),
+    }
+  )
+
+  if (tableName !== "audit_log") {
+    await insertAuditLogIntoSupabase({
+      table_name: tableName,
+      action: "EDIT",
+      record_key: keys.map(([k, v]) => `${k}=${v}`).join(", "),
+      old_values: primaryKeyValues,
+      new_values: updates,
+      action_by: actionBy || "superadmin",
+    }).catch(() => {})
+  }
+
+  return rows[0] || { ...primaryKeyValues, ...updates }
+}
+
+export async function deleteTableRowFromSupabase(
+  tableName: string,
+  primaryKeyValues: Record<string, any>,
+  actionBy?: string
+): Promise<void> {
+  if (tableName === "app_user") {
+    throw new Error("Access to app_user via Table Editor is restricted.")
+  }
+
+  const keys = Object.entries(primaryKeyValues)
+  if (keys.length === 0) {
+    throw new Error("Primary key values are required to delete a row.")
+  }
+
+  const queryParts = keys.map(
+    ([col, val]) => `${encodeURIComponent(col)}=eq.${encodeURIComponent(String(val))}`
+  )
+
+  await postgrestFetch(`/${encodeURIComponent(tableName)}?${queryParts.join("&")}`, {
+    method: "DELETE",
+  })
+
+  if (tableName !== "audit_log") {
+    await insertAuditLogIntoSupabase({
+      table_name: tableName,
+      action: "DELETE",
+      record_key: keys.map(([k, v]) => `${k}=${v}`).join(", "),
+      old_values: primaryKeyValues,
+      action_by: actionBy || "superadmin",
+    }).catch(() => {})
+  }
 }

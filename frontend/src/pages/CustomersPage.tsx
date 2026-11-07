@@ -1,4 +1,5 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import { fetchTableRowsFromSupabase, parseStamp } from "../backend/supabaseClient"
 import Badge from "../components/Badge"
 import BlockedDeleteModal from "../components/BlockedDeleteModal"
 import Button from "../components/Button"
@@ -9,7 +10,7 @@ import ModalShell from "../components/ModalShell"
 import Stamp from "../components/Stamp"
 import type { Role } from "../lib/types"
 
-const customers = [
+const fallbackCustomers = [
   [
     "C-001",
     "Acme Corporation",
@@ -124,22 +125,59 @@ function CustomerForm({
 
 export default function CustomersPage({ role }: { role: Role }) {
   const isAdmin = role !== "User"
+  const [customers, setCustomers] = useState<string[][]>(fallbackCustomers)
   const [filter, setFilter] = useState("active")
   const [search, setSearch] = useState("")
   const [form, setForm] = useState<string[] | "new" | null>(null)
   const [deleting, setDeleting] = useState<string[] | null>(null)
   const [blocked, setBlocked] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    fetchTableRowsFromSupabase("customer", "custno.asc")
+      .then((data) => {
+        if (!active || !data.length) return
+        const mapped = data.map((r) => {
+          const isDeleted = Boolean(r.is_deleted)
+          const [action, user, date] = parseStamp(r.stamp, isDeleted)
+          return [
+            String(r.custno ?? ""),
+            String(r.custname ?? "—"),
+            String(r.address ?? "—"),
+            String(r.payterm ?? "—"),
+            isDeleted ? "Inactive" : "Active",
+            action,
+            user,
+            date,
+          ]
+        })
+        setCustomers(mapped)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const counts = useMemo<[number, number, number]>(() => {
+    const activeCount = customers.filter((r) => r[4] === "Active").length
+    const inactiveCount = customers.filter((r) => r[4] === "Inactive").length
+    return [activeCount, inactiveCount, customers.length]
+  }, [customers])
+
   const rows = useMemo(
     () =>
       customers.filter((row) => {
         if (!isAdmin && row[4] === "Inactive") return false
         if (isAdmin && filter !== "all" && row[4].toLowerCase() !== filter)
           return false
-        return `${row[0]} ${row[1]} ${row[2]}`
+        const q = search.trim().toLowerCase()
+        if (!q) return true
+        return `${row[0]} ${row[1]} ${row[2]} ${row[3]}`
           .toLowerCase()
-          .includes(search.toLowerCase())
+          .includes(q)
       }),
-    [filter, isAdmin, search],
+    [customers, filter, isAdmin, search],
   )
   return (
     <div className="page module-page">
@@ -150,13 +188,13 @@ export default function CustomersPage({ role }: { role: Role }) {
           <p>Commercial identities, payment terms, and record provenance.</p>
         </div>
         <div className="module-count">
-          <b>05</b>
+          <b>{String(isAdmin ? counts[2] : counts[0]).padStart(2, "0")}</b>
           <span>customer records</span>
         </div>
       </div>
       <EntityControls
         isAdmin={isAdmin}
-        counts={[4, 1, 5]}
+        counts={counts}
         activeFilter={filter}
         onFilter={setFilter}
         search={search}
@@ -179,9 +217,9 @@ export default function CustomersPage({ role }: { role: Role }) {
                     <>
                       <th>Status</th>
                       <th>Stamp</th>
+                      <th>Actions</th>
                     </>
                   )}
-                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -204,25 +242,25 @@ export default function CustomersPage({ role }: { role: Role }) {
                         <td>
                           <Stamp action={row[5]} user={row[6]} date={row[7]} />
                         </td>
+                        <td>
+                          <div className="row-actions">
+                            {row[4] === "Inactive" ? (
+                              <button className="success-link">Restore</button>
+                            ) : (
+                              <>
+                                <button onClick={() => setForm(row)}>Edit</button>
+                                <button
+                                  className="danger-link"
+                                  onClick={() => setDeleting(row)}
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
                       </>
                     )}
-                    <td>
-                      <div className="row-actions">
-                        {row[4] === "Inactive" ? (
-                          <button className="success-link">Restore</button>
-                        ) : (
-                          <>
-                            <button onClick={() => setForm(row)}>Edit</button>
-                            <button
-                              className="danger-link"
-                              onClick={() => setDeleting(row)}
-                            >
-                              Delete
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
                   </tr>
                 ))}
               </tbody>

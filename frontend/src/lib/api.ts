@@ -412,6 +412,16 @@ export const userApi = {
       }
     )
   },
+
+  /**
+   * Superadmin deletes a password reset request and its associated token in `password_reset_token`.
+   * Endpoint: DELETE /api/users/reset-requests/:id
+   */
+  deleteResetRequest: (requestId: string): Promise<{ message: string }> => {
+    return apiFetch<{ message: string }>(`/api/users/reset-requests/${requestId}`, {
+      method: "DELETE",
+    })
+  },
 }
 
 // ============================================================================
@@ -440,6 +450,48 @@ export const rightsApi = {
     return apiFetch<{ message: string; rights: string[] }>(`/api/users/${userId}/rights`, {
       method: "POST",
       body: JSON.stringify({ rights }),
+    })
+  },
+}
+
+// ============================================================================
+// Table Editor APIs (Superadmin Only — All Public Tables Except app_user)
+// ============================================================================
+
+export const tableEditorApi = {
+  listRows: (tableName: string, orderBy?: string): Promise<Record<string, any>[]> => {
+    const query = orderBy ? `?order=${encodeURIComponent(orderBy)}` : ""
+    return apiFetch<Record<string, any>[]>(`/api/tables/${encodeURIComponent(tableName)}${query}`)
+  },
+
+  insertRow: (
+    tableName: string,
+    payload: Record<string, any>
+  ): Promise<Record<string, any>> => {
+    return apiFetch<Record<string, any>>(`/api/tables/${encodeURIComponent(tableName)}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    })
+  },
+
+  updateRow: (
+    tableName: string,
+    primaryKeys: Record<string, any>,
+    updates: Record<string, any>
+  ): Promise<Record<string, any>> => {
+    return apiFetch<Record<string, any>>(`/api/tables/${encodeURIComponent(tableName)}`, {
+      method: "PUT",
+      body: JSON.stringify({ primaryKeys, updates }),
+    })
+  },
+
+  deleteRow: (
+    tableName: string,
+    primaryKeyValues: Record<string, any>
+  ): Promise<{ message: string }> => {
+    return apiFetch<{ message: string }>(`/api/tables/${encodeURIComponent(tableName)}`, {
+      method: "DELETE",
+      body: JSON.stringify(primaryKeyValues),
     })
   },
 }

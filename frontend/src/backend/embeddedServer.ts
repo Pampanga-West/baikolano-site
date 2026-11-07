@@ -14,18 +14,24 @@
 
 import bcrypt from "bcryptjs"
 import {
+  cleanupUserPasswordResetTokensInSupabase,
+  deletePasswordResetRequestInSupabase,
+  deleteTableRowFromSupabase,
   deleteUserFromSupabase,
   fetchPasswordResetRequestsFromSupabase,
+  fetchTableRowsFromSupabase,
   fetchUserRightsFromSupabase,
   fetchUsersFromSupabase,
   findUserByEmailFromSupabase,
   findUserByIdFromSupabase,
   generateTokenForResetRequestInSupabase,
   insertAuditLogIntoSupabase,
+  insertTableRowIntoSupabase,
   insertUserIntoSupabase,
   createPasswordResetRequestInSupabase,
   resetPasswordWithTokenInSupabase,
   saveUserRightsInSupabase,
+  updateTableRowInSupabase,
   updateUserInSupabase,
   verifyPassword,
   type SupabaseUserRow,
@@ -250,6 +256,9 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
 
     // Set active session
     setSessionUser(user)
+
+    // Automatically delete any password reset tokens/requests for this user upon login
+    await cleanupUserPasswordResetTokensInSupabase(user.id, user.email).catch(() => {})
 
     return jsonResponse({
       message: "Login successful.",
@@ -571,6 +580,26 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
     }
   }
 
+  // 10c. Superadmin Delete Reset Request & Token (DELETE /api/users/reset-requests/:id)
+  const deleteResetReqMatch = pathname.match(/^\/api\/users\/reset-requests\/([^/]+)$/)
+  if (deleteResetReqMatch && method === "DELETE") {
+    try {
+      const caller = ensureAdmin()
+      if (caller.role !== "Superadmin") {
+        return jsonResponse({ message: "Only Superadmins can delete password reset tokens." }, 403)
+      }
+
+      const requestId = deleteResetReqMatch[1]
+      await deletePasswordResetRequestInSupabase(requestId, caller.email)
+
+      return jsonResponse({ message: "Password reset token and request deleted successfully." })
+    } catch (e: any) {
+      if (e.message === "UNAUTHORIZED") return jsonResponse({ message: "Not authenticated." }, 401)
+      if (e.message === "FORBIDDEN") return jsonResponse({ message: "Access denied." }, 403)
+      return jsonResponse({ message: e.message || "Failed to delete password reset token." }, 400)
+    }
+  }
+
   // Match /api/users/:id or sub-routes
   const userSubmatch = pathname.match(/^\/api\/users\/([^/]+)(?:\/(.*))?$/)
   if (userSubmatch) {
@@ -884,6 +913,51 @@ export async function handleEmbeddedRequest(urlPath: string, options: RequestIni
       } catch (e: any) {
         return jsonResponse({ message: e.message === "UNAUTHORIZED" ? "Not authenticated." : "Access denied." }, 403)
       }
+    }
+  }
+
+  // ==========================================================================
+  // Table Editor Endpoints (/api/tables/:tableName) -> Superadmin Only
+  // ==========================================================================
+  const tableMatch = pathname.match(/^\/api\/tables\/([^/]+)$/)
+  if (tableMatch) {
+    const tableName = decodeURIComponent(tableMatch[1])
+    if (tableName === "app_user") {
+      return jsonResponse({ message: "The app_user table is excluded from the Table Editor." }, 403)
+    }
+
+    try {
+      const caller = ensureAdmin()
+      if (caller.role !== "Superadmin") {
+        return jsonResponse({ message: "Only Superadmins can access the Table Editor." }, 403)
+      }
+
+      if (method === "GET") {
+        const orderBy = parsedUrl.searchParams.get("order") || undefined
+        const rows = await fetchTableRowsFromSupabase(tableName, orderBy)
+        return jsonResponse(rows)
+      }
+
+      if (method === "POST") {
+        const created = await insertTableRowIntoSupabase(tableName, body, caller.email)
+        return jsonResponse(created, 201)
+      }
+
+      if (method === "PUT" || method === "PATCH") {
+        const primaryKeys = body.primaryKeys || {}
+        const updates = body.updates || {}
+        const updated = await updateTableRowInSupabase(tableName, primaryKeys, updates, caller.email)
+        return jsonResponse(updated)
+      }
+
+      if (method === "DELETE") {
+        await deleteTableRowFromSupabase(tableName, body, caller.email)
+        return jsonResponse({ message: "Row deleted successfully." })
+      }
+    } catch (e: any) {
+      if (e.message === "UNAUTHORIZED") return jsonResponse({ message: "Not authenticated." }, 401)
+      if (e.message === "FORBIDDEN") return jsonResponse({ message: "Access denied." }, 403)
+      return jsonResponse({ message: e.message || "Table Editor operation failed." }, 400)
     }
   }
 

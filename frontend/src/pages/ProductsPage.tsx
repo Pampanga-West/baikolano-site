@@ -1,4 +1,9 @@
-import { useMemo, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
+import {
+  fetchTableRowsFromSupabase,
+  formatMoney,
+  parseStamp,
+} from "../backend/supabaseClient"
 import Badge from "../components/Badge"
 import BlockedDeleteModal from "../components/BlockedDeleteModal"
 import Button from "../components/Button"
@@ -9,7 +14,7 @@ import ModalShell from "../components/ModalShell"
 import Stamp from "../components/Stamp"
 import type { Role } from "../lib/types"
 
-const products = [
+const fallbackProducts = [
   [
     "P-001",
     "Industrial Widget A",
@@ -60,6 +65,55 @@ const products = [
     "system",
     "2026-10-05 3:30 PM",
   ],
+]
+
+type PriceHistoryEntry = {
+  prodcode: string
+  effdate: string
+  price: string
+  status: string
+  action: string
+  user: string
+  date: string
+}
+
+const fallbackPriceHistory: PriceHistoryEntry[] = [
+  {
+    prodcode: "P-001",
+    effdate: "2026-01-01",
+    price: "$13.75",
+    status: "Active",
+    action: "CREATED",
+    user: "system",
+    date: "2026-01-01 9:00 AM",
+  },
+  {
+    prodcode: "P-002",
+    effdate: "2026-01-15",
+    price: "$48.50",
+    status: "Active",
+    action: "CREATED",
+    user: "system",
+    date: "2026-01-15 10:00 AM",
+  },
+  {
+    prodcode: "P-003",
+    effdate: "2026-02-01",
+    price: "$28.00",
+    status: "Active",
+    action: "CREATED",
+    user: "system",
+    date: "2026-02-01 10:00 AM",
+  },
+  {
+    prodcode: "P-005",
+    effdate: "2026-01-20",
+    price: "$2.35",
+    status: "Active",
+    action: "CREATED",
+    user: "system",
+    date: "2026-01-20 3:30 PM",
+  },
 ]
 
 function ProductForm({
@@ -150,13 +204,32 @@ function PriceForm({
   )
 }
 
-function PriceHistory({ role, close }: { role: Role, close: () => void }) {
+function PriceHistory({
+  role,
+  product,
+  entries,
+  close,
+}: {
+  role: Role
+  product: string[]
+  entries: PriceHistoryEntry[]
+  close: () => void
+}) {
   const isAdmin = role !== "User"
   const [priceForm, setPriceForm] = useState<"new" | "edit" | null>(null)
+  const [statusFilter, setStatusFilter] = useState<"active" | "inactive" | "all">("active")
+
+  const visibleEntries = entries.filter((entry) => {
+    if (!isAdmin && entry.status === "Inactive") return false
+    if (isAdmin && statusFilter !== "all" && entry.status.toLowerCase() !== statusFilter)
+      return false
+    return true
+  })
+
   return (
     <ModalShell
-      title="Price History — P-003"
-      subtitle="Lubricant Oil 5L · Unit: can"
+      title={`Price History — ${product[0]}`}
+      subtitle={`${product[1]} · Unit: ${product[2]}`}
       close={close}
       wide
       footer={
@@ -165,18 +238,33 @@ function PriceHistory({ role, close }: { role: Role, close: () => void }) {
         </Button>
       }
     >
-      <div className="nested-toolbar">
-        {isAdmin && (
+      {isAdmin && (
+        <div className="nested-toolbar">
           <div className="filter-tabs">
-            <button className="selected">Active</button>
-            <button>Inactive</button>
-            <button>All</button>
+            <button
+              className={statusFilter === "active" ? "selected" : ""}
+              onClick={() => setStatusFilter("active")}
+            >
+              Active
+            </button>
+            <button
+              className={statusFilter === "inactive" ? "selected" : ""}
+              onClick={() => setStatusFilter("inactive")}
+            >
+              Inactive
+            </button>
+            <button
+              className={statusFilter === "all" ? "selected" : ""}
+              onClick={() => setStatusFilter("all")}
+            >
+              All
+            </button>
           </div>
-        )}
-        <Button icon="plus" onClick={() => setPriceForm("new")}>
-          Add Price
-        </Button>
-      </div>
+          <Button icon="plus" onClick={() => setPriceForm("new")}>
+            Add Price
+          </Button>
+        </div>
+      )}
       <div className="table-scroll">
         <table className="entity-table">
           <thead>
@@ -187,38 +275,58 @@ function PriceHistory({ role, close }: { role: Role, close: () => void }) {
                 <>
                   <th>Status</th>
                   <th>Stamp</th>
+                  <th>Actions</th>
                 </>
               )}
-              <th>Actions</th>
             </tr>
           </thead>
           <tbody>
-            <tr>
-              <td className="code-cell">2026-02-01</td>
-              <td>
-                <b className="price-value">$28.00</b>
-              </td>
-              {isAdmin && (
-                <>
+            {visibleEntries.length ? (
+              visibleEntries.map((entry) => (
+                <tr
+                  key={`${entry.prodcode}-${entry.effdate}`}
+                  className={entry.status === "Inactive" ? "inactive-row" : ""}
+                >
+                  <td className="code-cell">{entry.effdate}</td>
                   <td>
-                    <Badge kind="active">Active</Badge>
+                    <b className="price-value">{entry.price}</b>
                   </td>
-                  <td>
-                    <Stamp
-                      action="CREATED"
-                      user="system"
-                      date="2026-02-01 10:00 AM"
-                    />
-                  </td>
-                </>
-              )}
-              <td>
-                <div className="row-actions">
-                  <button onClick={() => setPriceForm("edit")}>Edit</button>
-                  <button className="danger-link">Delete</button>
-                </div>
-              </td>
-            </tr>
+                  {isAdmin && (
+                    <>
+                      <td>
+                        <Badge kind={entry.status.toLowerCase()}>
+                          {entry.status}
+                        </Badge>
+                      </td>
+                      <td>
+                        <Stamp
+                          action={entry.action}
+                          user={entry.user}
+                          date={entry.date}
+                        />
+                      </td>
+                      <td>
+                        <div className="row-actions">
+                          <button onClick={() => setPriceForm("edit")}>
+                            Edit
+                          </button>
+                          <button className="danger-link">Delete</button>
+                        </div>
+                      </td>
+                    </>
+                  )}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td
+                  colSpan={isAdmin ? 5 : 2}
+                  style={{ textAlign: "center", color: "var(--muted)", padding: "20px" }}
+                >
+                  No price history entries found for {product[0]}.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -234,23 +342,92 @@ function PriceHistory({ role, close }: { role: Role, close: () => void }) {
 
 export default function ProductsPage({ role }: { role: Role }) {
   const isAdmin = role !== "User"
+  const [products, setProducts] = useState<string[][]>(fallbackProducts)
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryEntry[]>(
+    fallbackPriceHistory
+  )
   const [filter, setFilter] = useState("active")
   const [search, setSearch] = useState("")
   const [form, setForm] = useState<string[] | "new" | null>(null)
-  const [prices, setPrices] = useState(false)
+  const [pricesProduct, setPricesProduct] = useState<string[] | null>(null)
   const [deleting, setDeleting] = useState<string[] | null>(null)
   const [blocked, setBlocked] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    Promise.all([
+      fetchTableRowsFromSupabase("product", "prodcode.asc"),
+      fetchTableRowsFromSupabase("pricehist", "effdate.desc"),
+    ])
+      .then(([prodRows, priceRows]) => {
+        if (!active || !prodRows.length) return
+
+        const mappedPrices: PriceHistoryEntry[] = priceRows.map((p) => {
+          const isDeleted = Boolean(p.is_deleted)
+          const [action, user, date] = parseStamp(p.stamp, isDeleted)
+          return {
+            prodcode: String(p.prodcode ?? ""),
+            effdate: String(p.effdate ?? ""),
+            price: formatMoney(p.unitprice),
+            status: isDeleted ? "Inactive" : "Active",
+            action,
+            user,
+            date,
+          }
+        })
+        setPriceHistory(mappedPrices)
+
+        const latestActivePriceByProd = new Map<string, string>()
+        for (const p of priceRows) {
+          if (p.is_deleted) continue
+          const code = String(p.prodcode ?? "")
+          if (!latestActivePriceByProd.has(code)) {
+            latestActivePriceByProd.set(code, formatMoney(p.unitprice))
+          }
+        }
+
+        const mappedProducts = prodRows.map((r) => {
+          const isDeleted = Boolean(r.is_deleted)
+          const [action, user, date] = parseStamp(r.stamp, isDeleted)
+          const code = String(r.prodcode ?? "")
+          return [
+            code,
+            String(r.description ?? "—"),
+            String(r.unit ?? "pcs"),
+            latestActivePriceByProd.get(code) ?? "—",
+            isDeleted ? "Inactive" : "Active",
+            action,
+            user,
+            date,
+          ]
+        })
+        setProducts(mappedProducts)
+      })
+      .catch(() => {})
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const counts = useMemo<[number, number, number]>(() => {
+    const activeCount = products.filter((r) => r[4] === "Active").length
+    const inactiveCount = products.filter((r) => r[4] === "Inactive").length
+    return [activeCount, inactiveCount, products.length]
+  }, [products])
+
   const rows = useMemo(
     () =>
       products.filter((row) => {
         if (!isAdmin && row[4] === "Inactive") return false
         if (isAdmin && filter !== "all" && row[4].toLowerCase() !== filter)
           return false
-        return `${row[0]} ${row[1]} ${row[2]}`
+        const q = search.trim().toLowerCase()
+        if (!q) return true
+        return `${row[0]} ${row[1]} ${row[2]} ${row[3]}`
           .toLowerCase()
-          .includes(search.toLowerCase())
+          .includes(q)
       }),
-    [filter, isAdmin, search],
+    [products, filter, isAdmin, search],
   )
   return (
     <div className="page module-page">
@@ -261,13 +438,13 @@ export default function ProductsPage({ role }: { role: Role }) {
           <p>Catalog records with effective-dated commercial pricing.</p>
         </div>
         <div className="module-count">
-          <b>05</b>
+          <b>{String(isAdmin ? counts[2] : counts[0]).padStart(2, "0")}</b>
           <span>catalog records</span>
         </div>
       </div>
       <EntityControls
         isAdmin={isAdmin}
-        counts={[4, 1, 5]}
+        counts={counts}
         activeFilter={filter}
         onFilter={setFilter}
         search={search}
@@ -322,19 +499,25 @@ export default function ProductsPage({ role }: { role: Role }) {
                     <td>
                       <div className="row-actions">
                         {row[4] === "Inactive" ? (
-                          <button className="success-link">Restore</button>
+                          isAdmin && (
+                            <button className="success-link">Restore</button>
+                          )
                         ) : (
                           <>
-                            <button onClick={() => setPrices(true)}>
+                            <button onClick={() => setPricesProduct(row)}>
                               Prices
                             </button>
-                            <button onClick={() => setForm(row)}>Edit</button>
-                            <button
-                              className="danger-link"
-                              onClick={() => setDeleting(row)}
-                            >
-                              Delete
-                            </button>
+                            {isAdmin && (
+                              <>
+                                <button onClick={() => setForm(row)}>Edit</button>
+                                <button
+                                  className="danger-link"
+                                  onClick={() => setDeleting(row)}
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            )}
                           </>
                         )}
                       </div>
@@ -358,7 +541,14 @@ export default function ProductsPage({ role }: { role: Role }) {
           close={() => setForm(null)}
         />
       )}
-      {prices && <PriceHistory role={role} close={() => setPrices(false)} />}
+      {pricesProduct && (
+        <PriceHistory
+          role={role}
+          product={pricesProduct}
+          entries={priceHistory.filter((p) => p.prodcode === pricesProduct[0])}
+          close={() => setPricesProduct(null)}
+        />
+      )}
       {deleting && (
         <ConfirmDeleteModal
           record={`${deleting[0]} ${deleting[1]}`}

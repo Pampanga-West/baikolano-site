@@ -52,9 +52,11 @@ export default function EntityControls({
             placeholder={placeholder}
           />
         </label>
-        <Button icon="plus" onClick={onAdd} disabled={!canAdd}>
-          {addLabel}
-        </Button>
+        {isAdmin && (
+          <Button icon="plus" onClick={onAdd} disabled={!canAdd}>
+            {addLabel}
+          </Button>
+        )}
       </div>
     </div>
   )

@@ -70,31 +70,22 @@ export default function DashboardPage({
             <button>Customize</button>
           </div>
           <div className="quick-grid">
-            {modules.map((item) => {
-              const disabled =
-                role === "User" && item.name === "Human Resources"
-              return (
-                <button
-                  className={`quick-action ${disabled ? "disabled" : ""}`}
-                  disabled={disabled}
-                  onClick={() => !disabled && goToModule?.(item.target)}
-                  key={item.name}
-                >
-                  <span className={`module-icon icon-${item.accent}`}>
-                    <Icon name={item.icon} />
-                  </span>
-                  <span>
-                    <b>{item.name}</b>
-                    <small>
-                      {disabled
-                        ? "Access not granted"
-                        : `Manage ${item.name.toLowerCase()}`}
-                    </small>
-                  </span>
-                  <Icon name={disabled ? "lock" : "chevron"} size={16} />
-                </button>
-              )
-            })}
+            {modules.map((item) => (
+              <button
+                className="quick-action"
+                onClick={() => goToModule?.(item.target)}
+                key={item.name}
+              >
+                <span className={`module-icon icon-${item.accent}`}>
+                  <Icon name={item.icon} />
+                </span>
+                <span>
+                  <b>{item.name}</b>
+                  <small>{`Manage ${item.name.toLowerCase()}`}</small>
+                </span>
+                <Icon name="chevron" size={16} />
+              </button>
+            ))}
           </div>
         </section>
         <section className="panel activity-panel">

@@ -1,7 +1,7 @@
 export type Role = "Superadmin" | "Admin" | "User"
 export type AccountStatus = "ACTIVE" | "PENDING" | "BLOCKED"
 export type AuthView = "login" | "register" | "reset" | "new-password" | null
-export type AppView = "landing" | "dashboard" | "customers" | "products" | "hr" | "sales" | "reports" | "users" | "audit" | "profile"
+export type AppView = "landing" | "dashboard" | "customers" | "products" | "hr" | "sales" | "reports" | "users" | "audit" | "profile" | "table-editor"
 
 export function normalizeRole(rawRole?: string | null): Role {
   if (!rawRole) return "User"

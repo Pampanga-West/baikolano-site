@@ -8,6 +8,7 @@ import { roleData } from "../lib/data"
 import { normalizeRole, type AppView, type IconName, type ManagedUser, type Role } from "../lib/types"
 import DashboardPage from "../pages/DashboardPage"
 import ProfilePage from "../pages/ProfilePage"
+import TableEditorPage from "../pages/TableEditorPage"
 import UserManagementPage from "../pages/UserManagementPage"
 
 const AuditLogPage = lazy(() => import("../pages/AuditLogPage"))
@@ -83,27 +84,16 @@ function Sidebar({
             <span className="nav-text">Dashboard</span>
           </button>
           <div className="nav-label">Modules</div>
-          {visibleModules.map(([name, icon, target]) => {
-            const restricted = role === "User" && target === "hr"
-            return (
-              <button
-                className={`nav-item ${view === target ? "active" : ""} ${
-                  restricted ? "restricted" : ""
-                }`}
-                onClick={() => !restricted && nav(target)}
-                disabled={restricted}
-                key={name}
-              >
-                <Icon name={icon} />
-                <span className="nav-text">{name}</span>
-                {restricted && (
-                  <span className="restriction-icon">
-                    <Icon name="lock" size={13} />
-                  </span>
-                )}
-              </button>
-            )
-          })}
+          {visibleModules.map(([name, icon, target]) => (
+            <button
+              className={`nav-item ${view === target ? "active" : ""}`}
+              onClick={() => nav(target)}
+              key={name}
+            >
+              <Icon name={icon} />
+              <span className="nav-text">{name}</span>
+            </button>
+          ))}
           {role !== "User" && (
             <>
               <div className="nav-label">Administration</div>
@@ -115,13 +105,30 @@ function Sidebar({
                 <span className="nav-text">User Management</span>
               </button>
               {role === "Superadmin" && (
-                <button
-                  className={`nav-item ${view === "audit" ? "active" : ""}`}
-                  onClick={() => nav("audit")}
-                >
-                  <Icon name="shield" />
-                  <span className="nav-text">Audit Log</span>
-                </button>
+                <>
+                  <button
+                    className={`nav-item ${view === "audit" ? "active" : ""}`}
+                    onClick={() => nav("audit")}
+                  >
+                    <Icon name="shield" />
+                    <span className="nav-text">Audit Log</span>
+                  </button>
+
+                  <div
+                    style={{
+                      height: "1px",
+                      background: "rgba(255, 255, 255, 0.1)",
+                      margin: "12px 10px",
+                    }}
+                  />
+                  <button
+                    className={`nav-item ${view === "table-editor" ? "active" : ""}`}
+                    onClick={() => nav("table-editor")}
+                  >
+                    <Icon name="package" />
+                    <span className="nav-text">Table Editor</span>
+                  </button>
+                </>
               )}
             </>
           )}
@@ -242,6 +249,7 @@ export default function WorkspaceLayout({
     user?.role || (user?.email?.toLowerCase() === "test@example.com" ? "Superadmin" : undefined) || initialRole
   )
   const [view, setView] = useState<AppView>("dashboard")
+  const [activeEditorTable, setActiveEditorTable] = useState<string>("customer")
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [rightsOpen, setRightsOpen] = useState(false)
   const [rightsTargetUser, setRightsTargetUser] = useState<ManagedUser | null>(null)
@@ -250,8 +258,8 @@ export default function WorkspaceLayout({
   const initials = getInitials(user?.email || displayName)
 
   const effectiveView =
-    (role === "User" && (view === "users" || view === "hr")) ||
-    (role !== "Superadmin" && view === "audit")
+    (role === "User" && view === "users") ||
+    (role !== "Superadmin" && (view === "audit" || view === "table-editor"))
       ? "dashboard"
       : view
 
@@ -307,6 +315,15 @@ export default function WorkspaceLayout({
           )}
           {effectiveView === "audit" && role === "Superadmin" && (
             <AuditLogPage />
+          )}
+          {effectiveView === "table-editor" && role === "Superadmin" && (
+            <TableEditorPage
+              activeTable={activeEditorTable}
+              onSelectTable={(tblName) => {
+                setActiveEditorTable(tblName)
+                setView("table-editor")
+              }}
+            />
           )}
         </Suspense>
       </div>
