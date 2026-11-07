@@ -1,5 +1,9 @@
 {
+  "title": "Hope, Inc. ERP",
   "description": "Streamline business operations with a comprehensive ERP platform offering user management, role-based dashboards, and secure authentication for efficient workflow.",
+  "icons": {
+    "icon": "/favicon.svg"
+  },
   "robots": {
     "index": false
   },
